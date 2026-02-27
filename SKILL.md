@@ -7,6 +7,9 @@ description: "Fetches RSS feeds from 90 top Hacker News blogs (curated by Karpat
 
 从 Karpathy 推荐的 90 个热门技术博客中抓取最新文章，通过 AI 评分筛选，生成每日精选摘要。
 
+> **Update 2026-02-26**: 已支持阿里云百炼大模型作为 AI 提供商（优先使用）。
+> 环境变量: `BAILIAN_API_KEY` 或 `DASHSCOPE_API_KEY`
+
 ## 命令
 
 ### `/digest`
@@ -43,6 +46,7 @@ Agent 在执行前**必须检查**此文件是否存在：
 **配置文件结构**:
 ```json
 {
+  "bailianApiKey": "",
   "geminiApiKey": "",
   "timeRange": 48,
   "topN": 15,
@@ -50,6 +54,10 @@ Agent 在执行前**必须检查**此文件是否存在：
   "lastUsed": "2026-02-14T12:00:00Z"
 }
 ```
+
+**说明**: 
+- `bailianApiKey`: 阿里云百炼 API Key (推荐，优先使用)
+- `geminiApiKey`: Gemini API Key (备用)
 
 ---
 
@@ -122,32 +130,40 @@ question({
 })
 ```
 
-### Step 1b: AI API Key（Gemini 优先，支持兜底）
+### Step 1b: AI API Key（阿里云百炼优先，支持兜底）
 
 如果配置中没有已保存的 API Key，询问：
 
 ```
 question({
   questions: [{
-    header: "Gemini API Key",
-    question: "推荐提供 Gemini API Key 作为主模型（可选再配置 OPENAI_API_KEY 兜底）\n\n获取方式：访问 https://aistudio.google.com/apikey 创建免费 API Key",
+    header: "阿里云百炼 API Key",
+    question: "推荐提供阿里云百炼 API Key（BAILIAN_API_KEY）作为主模型\n\n获取方式：\n1. 访问 https://bailian.console.aliyun.com/ 创建 API Key\n2. 或使用已有的 DASHSCOPE_API_KEY\n\n可选兜底: GEMINI_API_KEY 或 OPENAI_API_KEY",
     options: []
   }]
 })
 ```
 
-如果 `config.geminiApiKey` 已存在，跳过此步。
+如果 `config.bailianApiKey` 或 `config.geminiApiKey` 已存在，跳过此步。
 
 ### Step 2: 执行脚本
 
 ```bash
 mkdir -p ./output
 
-export GEMINI_API_KEY="<key>"
-# 可选：OpenAI 兼容兜底（DeepSeek/OpenAI 等）
-export OPENAI_API_KEY="<fallback-key>"
-export OPENAI_API_BASE="https://api.deepseek.com/v1"
-export OPENAI_MODEL="deepseek-chat"
+# 方式1: 阿里云百炼 (推荐)
+export BAILIAN_API_KEY="<your-bailian-api-key>"
+
+# 方式2: 阿里云百炼 (别名)
+# export DASHSCOPE_API_KEY="<your-dashscope-api-key>"
+
+# 方式3: Gemini (备用)
+# export GEMINI_API_KEY="<your-gemini-api-key>"
+
+# 可选兜底：OpenAI 兼容（DeepSeek/OpenAI 等）
+# export OPENAI_API_KEY="<fallback-key>"
+# export OPENAI_API_BASE="https://api.deepseek.com/v1"
+# export OPENAI_API_MODEL="deepseek-chat"
 
 npx -y bun ${SKILL_DIR}/scripts/digest.ts \
   --hours <timeRange> \
@@ -162,7 +178,8 @@ npx -y bun ${SKILL_DIR}/scripts/digest.ts \
 mkdir -p ~/.hn-daily-digest
 cat > ~/.hn-daily-digest/config.json << 'EOF'
 {
-  "geminiApiKey": "<key>",
+  "bailianApiKey": "<bailian-api-key>",
+  "geminiApiKey": "<gemini-api-key>",
   "timeRange": <hours>,
   "topN": <topN>,
   "language": "<zh|en>",
@@ -209,9 +226,15 @@ EOF
 ## 环境要求
 
 - `bun` 运行时（通过 `npx -y bun` 自动安装）
-- 至少一个 AI API Key（`GEMINI_API_KEY` 或 `OPENAI_API_KEY`）
-- 可选：`OPENAI_API_BASE`、`OPENAI_MODEL`（用于 OpenAI 兼容接口）
+- 至少一个 AI API Key（推荐使用 `BAILIAN_API_KEY` / `DASHSCOPE_API_KEY`，或 `GEMINI_API_KEY`、`OPENAI_API_KEY`）
+- 可选：`OPENAI_API_BASE`、`OPENAI_API_MODEL`（用于 OpenAI 兼容接口）
 - 网络访问（需要能访问 RSS 源和 AI API）
+
+### AI 提供商优先级
+
+1. **阿里云百炼** (`BAILIAN_API_KEY` / `DASHSCOPE_API_KEY`) - 优先使用
+2. **Gemini** (`GEMINI_API_KEY`) - 备用
+3. **OpenAI 兼容** (`OPENAI_API_KEY`) - 兜底
 
 ---
 
@@ -227,11 +250,19 @@ EOF
 
 ## 故障排除
 
-### "GEMINI_API_KEY not set"
-需要提供 Gemini API Key，可在 https://aistudio.google.com/apikey 免费获取。
+### "BAILIAN_API_KEY not set" / "GEMINI_API_KEY not set" / "No AI API key configured"
+需要提供至少一个 AI API Key：
+- **阿里云百炼** (推荐): `BAILIAN_API_KEY` 或 `DASHSCOPE_API_KEY`
+  - 获取地址: https://bailian.console.aliyun.com/
+- **Gemini** (备用): `GEMINI_API_KEY`
+  - 获取地址: https://aistudio.google.com/apikey
+- **OpenAI 兼容** (兜底): `OPENAI_API_KEY`
 
-### "Gemini 配额超限或请求失败"
-脚本会自动降级到 OpenAI 兼容接口（需提供 `OPENAI_API_KEY`，可选 `OPENAI_API_BASE`）。
+### "Bailian API error" / "Gemini 配额超限或请求失败"
+脚本会按以下优先级自动降级：
+1. 阿里云百炼 (`BAILIAN_API_KEY`) → 
+2. Gemini (`GEMINI_API_KEY`) → 
+3. OpenAI 兼容接口 (`OPENAI_API_KEY`)
 
 ### "Failed to fetch N feeds"
 部分 RSS 源可能暂时不可用，脚本会跳过失败的源并继续处理。
