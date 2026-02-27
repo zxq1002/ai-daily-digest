@@ -1,3 +1,7 @@
 generated_imgs/
 node_modules/
 *.log
+
+# Worktrees
+.worktrees/
+worktrees/
