@@ -44,6 +44,9 @@ export DASHSCOPE_API_KEY="your-dashscope-api-key"
 # export OPENAI_MODEL="deepseek-chat"
 
 npx -y bun scripts/digest.ts --hours 48 --top-n 15 --lang zh --output ./digest.md
+
+# 输出 PDF 格式（新增）
+npx -y bun scripts/digest.ts --hours 48 --top-n 15 --lang zh --format pdf --output ./digest.pdf
 ```
 
 ## 功能
