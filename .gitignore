@@ -1,6 +1,7 @@
 generated_imgs/
 node_modules/
 *.log
+run.sh 
 
 # Worktrees
 .worktrees/

@@ -4,24 +4,24 @@
  * Supports Chinese characters and emoji
  */
 
-import { chromium } from 'playwright';
-import { writeFile, mkdir, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { chromium } from "playwright";
+import { writeFile, mkdir, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
 /**
  * Convert Markdown to PDF with Chinese and emoji support
  */
 export async function convertMarkdownToPDF(
   markdown: string,
-  outputPath: string
+  outputPath: string,
 ): Promise<void> {
   const tempHtmlPath = join(tmpdir(), `digest-${Date.now()}.html`);
 
   try {
     // Generate HTML with Chinese support
     const html = generateHTMLWithChineseSupport(markdown);
-    await writeFile(tempHtmlPath, html, 'utf-8');
+    await writeFile(tempHtmlPath, html, "utf-8");
 
     // Launch browser
     const browser = await chromium.launch({ headless: true });
@@ -31,8 +31,8 @@ export async function convertMarkdownToPDF(
 
       // Load HTML and wait for fonts to load
       await page.goto(`file://${tempHtmlPath}`, {
-        waitUntil: 'networkidle',
-        timeout: 30000
+        waitUntil: "networkidle",
+        timeout: 30000,
       });
 
       // Ensure output directory exists
@@ -41,22 +41,22 @@ export async function convertMarkdownToPDF(
       // Generate PDF with proper settings for Chinese
       await page.pdf({
         path: outputPath,
-        format: 'A4',
+        format: "A4",
         printBackground: true,
         preferCSSPageSize: true,
         displayHeaderFooter: true,
-        headerTemplate: '<div></div>',
+        headerTemplate: "<div></div>",
         footerTemplate: `
           <div style="font-size: 9px; width: 100%; text-align: center; color: #666; padding: 0 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;">
             <span class="pageNumber"></span> / <span class="totalPages"></span>
           </div>
         `,
         margin: {
-          top: '20mm',
-          right: '20mm',
-          bottom: '25mm',
-          left: '20mm'
-        }
+          top: "20mm",
+          right: "20mm",
+          bottom: "25mm",
+          left: "20mm",
+        },
       });
 
       console.log(`✅ PDF 已生成: ${outputPath}`);
@@ -305,51 +305,58 @@ function generateHTMLWithChineseSupport(markdown: string): string {
 function convertMarkdownToHTML(markdown: string): string {
   let html = markdown
     // Fenced code blocks (must be first)
-    .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+    .replace(
+      /```(\w+)?\n([\s\S]*?)```/g,
+      '<pre><code class="language-$1">$2</code></pre>',
+    )
     // Headers
-    .replace(/^###### (.*$)/gm, '<h6>$1</h6>')
-    .replace(/^##### (.*$)/gm, '<h5>$1</h5>')
-    .replace(/^#### (.*$)/gm, '<h4>$1</h4>')
-    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+    .replace(/^###### (.*$)/gm, "<h6>$1</h6>")
+    .replace(/^##### (.*$)/gm, "<h5>$1</h5>")
+    .replace(/^#### (.*$)/gm, "<h4>$1</h4>")
+    .replace(/^### (.*$)/gm, "<h3>$1</h3>")
+    .replace(/^## (.*$)/gm, "<h2>$1</h2>")
+    .replace(/^# (.*$)/gm, "<h1>$1</h1>")
     // Bold + italic
-    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
     // Bold
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.+?)__/g, '<strong>$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/__(.+?)__/g, "<strong>$1</strong>")
     // Italic
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/_(.+?)_/g, "<em>$1</em>")
     // Inline code
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
     // Links
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
     // Images
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />')
     // Unordered lists
-    .replace(/^(\s*)[-*+] (.*$)/gm, '<li>$2</li>')
+    .replace(/^(\s*)[-*+] (.*$)/gm, "<li>$2</li>")
     // Ordered lists
-    .replace(/^(\s*)\d+\. (.*$)/gm, '<li>$2</li>')
+    .replace(/^(\s*)\d+\. (.*$)/gm, "<li>$2</li>")
     // Blockquotes
-    .replace(/^(\s*)> (.*$)/gm, '<blockquote>$2</blockquote>')
+    .replace(/^(\s*)> (.*$)/gm, "<blockquote>$2</blockquote>")
     // Horizontal rules
-    .replace(/^---+$/gm, '<hr />')
+    .replace(/^---+$/gm, "<hr />")
     // Line breaks (preserve empty lines as paragraph separators)
-    .replace(/\n\n/g, '</p><p>');
+    .replace(/\n\n/g, "</p><p>");
 
   // Wrap in paragraph if not already wrapped
-  if (!html.startsWith('<h') && !html.startsWith('<p>') && !html.startsWith('<pre>') && !html.startsWith('<ul>') && !html.startsWith('<ol>') && !html.startsWith('<blockquote>')) {
-    html = '<p>' + html + '</p>';
+  if (
+    !html.startsWith("<h") &&
+    !html.startsWith("<p>") &&
+    !html.startsWith("<pre>") &&
+    !html.startsWith("<ul>") &&
+    !html.startsWith("<ol>") &&
+    !html.startsWith("<blockquote>")
+  ) {
+    html = "<p>" + html + "</p>";
   }
 
   // Wrap list items in appropriate lists
   html = html.replace(/(<li>.*?<\/li>\n*)+/g, (match) => {
-    return '<ul>' + match + '</ul>';
+    return "<ul>" + match + "</ul>";
   });
 
   return html;
 }
-
-// Export for use in digest.ts
-export { convertMarkdownToPDF };
