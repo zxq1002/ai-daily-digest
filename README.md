@@ -2,7 +2,7 @@
 
 skill 制作详情可查看 ➡️ https://mp.weixin.qq.com/s/rkQ28KTZs5QeZqjwSCvR4Q
 
-从 [Andrej Karpathy](https://x.com/karpathy) 推荐的 90 个 Hacker News 顶级技术博客中抓取最新文章，通过 AI 多维评分筛选，生成一份结构化的每日精选日报。默认使用 Gemini，并支持自动降级到 OpenAI 兼容 API。
+从 [Andrej Karpathy](https://x.com/karpathy) 推荐的 90 个 Hacker News 顶级技术博客中抓取最新文章，通过 AI 多维评分筛选，生成一份结构化的每日精选日报。默认使用阿里云百炼大模型（优先），并支持自动降级到 Gemini 和 OpenAI 兼容 API。
 
 ![AI Daily Digest 概览](assets/overview.png)
 
@@ -30,10 +30,19 @@ Agent 会依次询问：
 ### 直接命令行运行
 
 ```bash
-export GEMINI_API_KEY="your-key"
-export OPENAI_API_KEY="your-openai-compatible-key"  # 可选，Gemini 失败时兜底
-export OPENAI_API_BASE="https://api.deepseek.com/v1" # 可选，默认 https://api.openai.com/v1
-export OPENAI_MODEL="deepseek-chat"                  # 可选，不填会自动推断
+# 方式1: 阿里云百炼 (推荐)
+export BAILIAN_API_KEY="your-bailian-api-key"
+# 或
+export DASHSCOPE_API_KEY="your-dashscope-api-key"
+
+# 方式2: Gemini (备用)
+# export GEMINI_API_KEY="your-gemini-api-key"
+
+# 可选兜底：OpenAI 兼容（DeepSeek/OpenAI 等）
+# export OPENAI_API_KEY="your-openai-compatible-key"
+# export OPENAI_API_BASE="https://api.deepseek.com/v1"
+# export OPENAI_MODEL="deepseek-chat"
+
 npx -y bun scripts/digest.ts --hours 48 --top-n 15 --lang zh --output ./digest.md
 ```
 
@@ -87,13 +96,14 @@ RSS 抓取 → 时间过滤 → AI 评分+分类 → AI 摘要+翻译 → 趋势
 
 - [Bun](https://bun.sh) 运行时（通过 `npx -y bun` 自动安装）
 - 至少一个可用的 AI API Key：
-  - `GEMINI_API_KEY`（[免费获取](https://aistudio.google.com/apikey)）
+  - `BAILIAN_API_KEY` 或 `DASHSCOPE_API_KEY`（[阿里云百炼](https://bailian.console.aliyun.com/)，推荐）
+  - 或 `GEMINI_API_KEY`（[Google Gemini](https://aistudio.google.com/apikey)，备用）
   - 或 `OPENAI_API_KEY`（可配合 `OPENAI_API_BASE` 使用 DeepSeek / OpenAI 等 OpenAI 兼容服务）
 - 网络连接
 
 ## 切换 AI 模型提供商
 
-本项目默认使用 Gemini API（免费），如果你希望替换为其他模型提供商（如 OpenAI、Anthropic、DeepSeek、通义千问等），可以借助 AI 编码助手一键完成。
+本项目已默认支持阿里云百炼大模型（优先），并兼容 Gemini 和 OpenAI 兼容 API。你可以直接使用阿里云百炼，无需修改代码。
 
 ### 方法：让 AI 帮你改
 
@@ -125,17 +135,15 @@ RSS 抓取 → 时间过滤 → AI 评分+分类 → AI 摘要+翻译 → 趋势
 
 其余所有代码（RSS 抓取、评分 prompt、摘要 prompt、报告生成）均与 AI 提供商无关，无需修改。Prompt 内容本身是通用的，切换模型后可以直接复用。
 
-### 常见替换示例
+### 阿里云百炼配置示例
 
 | 提供商 | API Endpoint | Key 环境变量 |
 |--------|-------------|-------------|
-| OpenAI | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` |
-| Anthropic | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY` |
-| DeepSeek | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | `DASHSCOPE_API_KEY` |
-| OpenAI 兼容 API | 自定义 endpoint | 自定义 |
+| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | `BAILIAN_API_KEY` 或 `DASHSCOPE_API_KEY` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent` | `GEMINI_API_KEY` |
+| OpenAI 兼容 | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` |
 
-> 💡 如果目标提供商兼容 OpenAI API 格式（如 DeepSeek、Groq、Together AI 等），改动量更小 — 只需换 URL 和 Key，request/response 格式相同。
+> 💡 阿里云百炼使用 OpenAI 兼容模式，请求格式与 OpenAI API 相同，只需更换 endpoint 和 key 即可。
 
 ## 信息源
 
