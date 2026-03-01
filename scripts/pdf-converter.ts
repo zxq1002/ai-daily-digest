@@ -35,6 +35,17 @@ export async function convertMarkdownToPDF(
         timeout: 30000,
       });
 
+      // Wait for fonts to be fully loaded
+      await page.waitForFunction(
+        () => {
+          return document.fonts.ready;
+        },
+        { timeout: 10000 },
+      );
+
+      // Additional wait for any late font rendering
+      await page.waitForTimeout(500);
+
       // Ensure output directory exists
       await mkdir(dirname(outputPath), { recursive: true });
 
@@ -89,16 +100,19 @@ function generateHTMLWithChineseSupport(markdown: string): string {
     /* System font stack with comprehensive Chinese and emoji support */
     body {
       font-family:
+        /* Linux servers - System fonts priority */
+        "Noto Sans CJK SC", "Noto Sans SC", "Noto Sans",
+        "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
+        "Source Han Sans SC", "Source Han Sans",
         /* Apple systems */
         -apple-system, BlinkMacSystemFont,
+        "PingFang SC", "Hiragino Sans GB",
         /* Windows */
-        "Segoe UI",
-        /* Chinese fonts - comprehensive coverage */
-        "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
-        "Microsoft YaHei", "WenQuanYi Micro Hei",
+        "Segoe UI", "Microsoft YaHei",
         /* Emoji fonts */
+        "Noto Color Emoji",
         "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
-        "Noto Color Emoji", "Android Emoji", "EmojiSymbols",
+        "Android Emoji", "EmojiSymbols",
         /* Fallback */
         sans-serif;
       font-size: 14px;
@@ -114,14 +128,23 @@ function generateHTMLWithChineseSupport(markdown: string): string {
     /* Emoji specific styling */
     .emoji, [role="img"], .emoji-native {
       font-family:
+        "Noto Color Emoji",
         "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
-        "Noto Color Emoji", "Android Emoji", "EmojiSymbols";
+        "Android Emoji", "EmojiSymbols";
       font-style: normal;
       font-weight: normal;
       font-size: 1em;
       line-height: 1;
       display: inline-block;
       vertical-align: middle;
+    }
+
+    /* Force consistent character spacing */
+    * {
+      text-rendering: optimizeLegibility;
+      -webkit-font-feature-settings: "kern" 1;
+      font-feature-settings: "kern" 1;
+      font-kerning: normal;
     }
 
     h1 {

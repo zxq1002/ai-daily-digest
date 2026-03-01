@@ -620,9 +620,7 @@ function parseDate(dateStr: string): Date | null {
   return null;
 }
 
-function parseRSSItems(
-  xml: string,
-): Array<{
+function parseRSSItems(xml: string): Array<{
   title: string;
   link: string;
   pubDate: string;
@@ -1644,6 +1642,7 @@ async function main(): Promise<void> {
   let topN = 15;
   let lang: "zh" | "en" = "zh";
   let outputPath = "";
+  let format: "md" | "pdf" = "md";
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -1655,6 +1654,11 @@ async function main(): Promise<void> {
       lang = args[++i] as "zh" | "en";
     } else if (arg === "--output" && args[i + 1]) {
       outputPath = args[++i]!;
+    } else if (arg === "--format" && args[i + 1]) {
+      const fmt = args[++i]!;
+      if (fmt === "pdf" || fmt === "md") {
+        format = fmt;
+      }
     }
   }
 
@@ -1812,7 +1816,13 @@ async function main(): Promise<void> {
   });
 
   await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, report);
+
+  if (format === "pdf") {
+    console.log(`[digest] 🔄 Converting to PDF...`);
+    await convertMarkdownToPDF(report, outputPath);
+  } else {
+    await writeFile(outputPath, report);
+  }
 
   console.log("");
   console.log(`[digest] ✅ Done!`);
