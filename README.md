@@ -104,6 +104,45 @@ RSS 抓取 → 时间过滤 → AI 评分+分类 → AI 摘要+翻译 → 趋势
   - 或 `OPENAI_API_KEY`（可配合 `OPENAI_API_BASE` 使用 DeepSeek / OpenAI 等 OpenAI 兼容服务）
 - 网络连接
 
+### PDF 生成功能的前置条件
+
+如果要使用 PDF 格式输出功能（`--format pdf`），需要确保以下依赖已安装：
+
+1. **Node.js 依赖**: 初始化项目并安装 Playwright
+   ```bash
+   npm init -y
+   npm install playwright
+   ```
+
+2. **浏览器二进制文件**: 下载 Chromium 浏览器
+   ```bash
+   npx playwright install chromium
+   ```
+
+3. **系统依赖**（Linux 服务器环境）: 安装运行 Chromium 所需的系统库
+   ```bash
+   # Ubuntu/Debian（推荐方式）
+   npx playwright install-deps chromium
+
+   # 或手动安装
+   sudo apt-get update
+   sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
+   ```
+
+4. **中文字体**（必须）: 安装中文字体以避免 PDF 中文字符间距异常
+   ```bash
+   # Ubuntu/Debian - 安装思源黑体和文泉驿字体
+   sudo apt-get install -y fonts-noto-cjk fonts-noto-color-emoji fonts-wqy-microhei fonts-wqy-zenhei
+
+   # 刷新字体缓存
+   sudo fc-cache -fv
+
+   # 验证字体安装
+   fc-list :lang=zh | grep -E "(Noto|WenQuanYi)"
+   ```
+
+> 💡 **提示**: 如果 PDF 生成失败并提示浏览器找不到，请检查步骤 2 是否已完成。如果在 Docker 或 Linux 服务器上运行，请确保步骤 3 和 4 的系统依赖已安装。**中文字体（步骤 4）是生成正确中文 PDF 的必要条件，缺少会导致文字间距异常。**
+
 ## 切换 AI 模型提供商
 
 本项目已默认支持阿里云百炼大模型（优先），并兼容 Gemini 和 OpenAI 兼容 API。你可以直接使用阿里云百炼，无需修改代码。
