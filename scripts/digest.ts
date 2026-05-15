@@ -1,4 +1,4 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import process from "node:process";
 import { convertMarkdownToPDF } from "./pdf-converter.ts";
@@ -7,20 +7,8 @@ import { convertMarkdownToPDF } from "./pdf-converter.ts";
 // Constants
 // ============================================================================
 
-// 阿里云百炼大模型 API (OpenAI 兼容模式)
-const BAILIAN_API_URL =
-  "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-const BAILIAN_MODEL = "qwen3.5-plus"; // 可选: qwen-max, qwen-plus, qwen-turbo
-
-// 保留原有 Gemini 配置作为兼容
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent";
-const OPENAI_DEFAULT_API_BASE = "https://api.openai.com/v1";
-const OPENAI_DEFAULT_MODEL = "gpt-4o-mini";
 const FEED_FETCH_TIMEOUT_MS = 15_000;
 const FEED_CONCURRENCY = 10;
-const GEMINI_BATCH_SIZE = 10;
-const MAX_CONCURRENT_GEMINI = 2;
 
 // 90 RSS feeds from Hacker News Popularity Contest 2025 (curated by Karpathy)
 const RSS_FEEDS: Array<{ name: string; xmlUrl: string; htmlUrl: string }> = [
@@ -530,29 +518,6 @@ interface ScoredArticle extends Article {
   reason: string;
 }
 
-interface GeminiScoringResult {
-  results: Array<{
-    index: number;
-    relevance: number;
-    quality: number;
-    timeliness: number;
-    category: string;
-    keywords: string[];
-  }>;
-}
-
-interface GeminiSummaryResult {
-  results: Array<{
-    index: number;
-    titleZh: string;
-    summary: string;
-    reason: string;
-  }>;
-}
-
-interface AIClient {
-  call(prompt: string): Promise<string>;
-}
 
 // ============================================================================
 // RSS/Atom Parsing (using Bun's built-in HTMLRewriter or manual XML parsing)
@@ -773,588 +738,15 @@ async function fetchAllFeeds(feeds: typeof RSS_FEEDS): Promise<Article[]> {
     }
 
     const progress = Math.min(i + FEED_CONCURRENCY, feeds.length);
-    console.log(
+    console.error(
       `[digest] Progress: ${progress}/${feeds.length} feeds processed (${successCount} ok, ${failCount} failed)`,
     );
   }
 
-  console.log(
+  console.error(
     `[digest] Fetched ${allArticles.length} articles from ${successCount} feeds (${failCount} failed)`,
   );
   return allArticles;
-}
-
-// ============================================================================
-// AI Providers (Gemini + OpenAI-compatible fallback)
-// ============================================================================
-
-async function callBailian(prompt: string, apiKey: string): Promise<string> {
-  // 使用阿里云百炼大模型 API (OpenAI 兼容模式)
-  const response = await fetch(BAILIAN_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: BAILIAN_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      top_p: 0.8,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "Unknown error");
-    throw new Error(`Bailian API error (${response.status}): ${errorText}`);
-  }
-
-  const data = (await response.json()) as {
-    choices?: Array<{
-      message?: { content?: string };
-    }>;
-  };
-
-  return data.choices?.[0]?.message?.content || "";
-}
-
-async function callGemini(prompt: string, apiKey: string): Promise<string> {
-  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.3,
-        topP: 0.8,
-        topK: 40,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "Unknown error");
-    throw new Error(`Gemini API error (${response.status}): ${errorText}`);
-  }
-
-  const data = (await response.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-    }>;
-  };
-
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-}
-
-async function callOpenAICompatible(
-  prompt: string,
-  apiKey: string,
-  apiBase: string,
-  model: string,
-): Promise<string> {
-  const normalizedBase = apiBase.replace(/\/+$/, "");
-  const response = await fetch(`${normalizedBase}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      top_p: 0.8,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "Unknown error");
-    throw new Error(
-      `OpenAI-compatible API error (${response.status}): ${errorText}`,
-    );
-  }
-
-  const data = (await response.json()) as {
-    choices?: Array<{
-      message?: {
-        content?: string | Array<{ type?: string; text?: string }>;
-      };
-    }>;
-  };
-
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((item) => item.type === "text" && typeof item.text === "string")
-      .map((item) => item.text)
-      .join("\n");
-  }
-  return "";
-}
-
-function inferOpenAIModel(apiBase: string): string {
-  const base = apiBase.toLowerCase();
-  if (base.includes("deepseek")) return "deepseek-chat";
-  return OPENAI_DEFAULT_MODEL;
-}
-
-function createAIClient(config: {
-  bailianApiKey?: string;
-  geminiApiKey?: string;
-  openaiApiKey?: string;
-  openaiApiBase?: string;
-  openaiModel?: string;
-}): AIClient {
-  const state = {
-    bailianApiKey: config.bailianApiKey?.trim() || "",
-    geminiApiKey: config.geminiApiKey?.trim() || "",
-    openaiApiKey: config.openaiApiKey?.trim() || "",
-    openaiApiBase: (
-      config.openaiApiBase?.trim() || OPENAI_DEFAULT_API_BASE
-    ).replace(/\/+$/, ""),
-    openaiModel: config.openaiModel?.trim() || "",
-    bailianEnabled: Boolean(config.bailianApiKey?.trim()),
-    geminiEnabled: Boolean(config.geminiApiKey?.trim()),
-    fallbackLogged: false,
-  };
-
-  if (!state.openaiModel) {
-    state.openaiModel = inferOpenAIModel(state.openaiApiBase);
-  }
-
-  return {
-    async call(prompt: string): Promise<string> {
-      // 优先使用阿里云百炼
-      if (state.bailianEnabled && state.bailianApiKey) {
-        try {
-          return await callBailian(prompt, state.bailianApiKey);
-        } catch (error) {
-          if (state.geminiEnabled && state.geminiApiKey) {
-            if (!state.fallbackLogged) {
-              const reason =
-                error instanceof Error ? error.message : String(error);
-              console.warn(
-                `[digest] Bailian failed, switching to Gemini fallback. Reason: ${reason}`,
-              );
-              state.fallbackLogged = true;
-            }
-            state.bailianEnabled = false;
-            return callGemini(prompt, state.geminiApiKey);
-          } else if (state.openaiApiKey) {
-            if (!state.fallbackLogged) {
-              const reason =
-                error instanceof Error ? error.message : String(error);
-              console.warn(
-                `[digest] Bailian failed, switching to OpenAI-compatible fallback (${state.openaiApiBase}, model=${state.openaiModel}). Reason: ${reason}`,
-              );
-              state.fallbackLogged = true;
-            }
-            state.bailianEnabled = false;
-            return callOpenAICompatible(
-              prompt,
-              state.openaiApiKey,
-              state.openaiApiBase,
-              state.openaiModel,
-            );
-          }
-          throw error;
-        }
-      }
-
-      if (state.geminiEnabled && state.geminiApiKey) {
-        try {
-          return await callGemini(prompt, state.geminiApiKey);
-        } catch (error) {
-          if (state.openaiApiKey) {
-            if (!state.fallbackLogged) {
-              const reason =
-                error instanceof Error ? error.message : String(error);
-              console.warn(
-                `[digest] Gemini failed, switching to OpenAI-compatible fallback (${state.openaiApiBase}, model=${state.openaiModel}). Reason: ${reason}`,
-              );
-              state.fallbackLogged = true;
-            }
-            state.geminiEnabled = false;
-            return callOpenAICompatible(
-              prompt,
-              state.openaiApiKey,
-              state.openaiApiBase,
-              state.openaiModel,
-            );
-          }
-          throw error;
-        }
-      }
-
-      if (state.openaiApiKey) {
-        return callOpenAICompatible(
-          prompt,
-          state.openaiApiKey,
-          state.openaiApiBase,
-          state.openaiModel,
-        );
-      }
-
-      throw new Error(
-        "No AI API key configured. Set BAILIAN_API_KEY, GEMINI_API_KEY, and/or OPENAI_API_KEY.",
-      );
-    },
-  };
-}
-
-function parseJsonResponse<T>(text: string): T {
-  let jsonText = text.trim();
-  // Strip markdown code blocks if present
-  if (jsonText.startsWith("```")) {
-    jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-  }
-  return JSON.parse(jsonText) as T;
-}
-
-// ============================================================================
-// AI Scoring
-// ============================================================================
-
-function buildScoringPrompt(
-  articles: Array<{
-    index: number;
-    title: string;
-    description: string;
-    sourceName: string;
-  }>,
-): string {
-  const articlesList = articles
-    .map(
-      (a) =>
-        `Index ${a.index}: [${a.sourceName}] ${a.title}\n${a.description.slice(0, 300)}`,
-    )
-    .join("\n\n---\n\n");
-
-  return `你是一个技术内容策展人，正在为一份面向技术爱好者的每日精选摘要筛选文章。
-
-请对以下文章进行三个维度的评分（1-10 整数，10 分最高），并为每篇文章分配一个分类标签和提取 2-4 个关键词。
-
-## 评分维度
-
-### 1. 相关性 (relevance) - 对技术/编程/AI/互联网从业者的价值
-- 10: 所有技术人都应该知道的重大事件/突破
-- 7-9: 对大部分技术从业者有价值
-- 4-6: 对特定技术领域有价值
-- 1-3: 与技术行业关联不大
-
-### 2. 质量 (quality) - 文章本身的深度和写作质量
-- 10: 深度分析，原创洞见，引用丰富
-- 7-9: 有深度，观点独到
-- 4-6: 信息准确，表达清晰
-- 1-3: 浅尝辄止或纯转述
-
-### 3. 时效性 (timeliness) - 当前是否值得阅读
-- 10: 正在发生的重大事件/刚发布的重要工具
-- 7-9: 近期热点相关
-- 4-6: 常青内容，不过时
-- 1-3: 过时或无时效价值
-
-## 分类标签（必须从以下选一个）
-- ai-ml: AI、机器学习、LLM、深度学习相关
-- security: 安全、隐私、漏洞、加密相关
-- engineering: 软件工程、架构、编程语言、系统设计
-- tools: 开发工具、开源项目、新发布的库/框架
-- opinion: 行业观点、个人思考、职业发展、文化评论
-- other: 以上都不太适合的
-
-## 关键词提取
-提取 2-4 个最能代表文章主题的关键词（用英文，简短，如 "Rust", "LLM", "database", "performance"）
-
-## 待评分文章
-
-${articlesList}
-
-请严格按 JSON 格式返回，不要包含 markdown 代码块或其他文字：
-{
-  "results": [
-    {
-      "index": 0,
-      "relevance": 8,
-      "quality": 7,
-      "timeliness": 9,
-      "category": "engineering",
-      "keywords": ["Rust", "compiler", "performance"]
-    }
-  ]
-}`;
-}
-
-async function scoreArticlesWithAI(
-  articles: Article[],
-  aiClient: AIClient,
-): Promise<
-  Map<
-    number,
-    {
-      relevance: number;
-      quality: number;
-      timeliness: number;
-      category: CategoryId;
-      keywords: string[];
-    }
-  >
-> {
-  const allScores = new Map<
-    number,
-    {
-      relevance: number;
-      quality: number;
-      timeliness: number;
-      category: CategoryId;
-      keywords: string[];
-    }
-  >();
-
-  const indexed = articles.map((article, index) => ({
-    index,
-    title: article.title,
-    description: article.description,
-    sourceName: article.sourceName,
-  }));
-
-  const batches: (typeof indexed)[] = [];
-  for (let i = 0; i < indexed.length; i += GEMINI_BATCH_SIZE) {
-    batches.push(indexed.slice(i, i + GEMINI_BATCH_SIZE));
-  }
-
-  console.log(
-    `[digest] AI scoring: ${articles.length} articles in ${batches.length} batches`,
-  );
-
-  const validCategories = new Set<string>([
-    "ai-ml",
-    "security",
-    "engineering",
-    "tools",
-    "opinion",
-    "other",
-  ]);
-
-  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_GEMINI) {
-    const batchGroup = batches.slice(i, i + MAX_CONCURRENT_GEMINI);
-    const promises = batchGroup.map(async (batch) => {
-      try {
-        const prompt = buildScoringPrompt(batch);
-        const responseText = await aiClient.call(prompt);
-        const parsed = parseJsonResponse<GeminiScoringResult>(responseText);
-
-        if (parsed.results && Array.isArray(parsed.results)) {
-          for (const result of parsed.results) {
-            const clamp = (v: number) =>
-              Math.min(10, Math.max(1, Math.round(v)));
-            const cat = (
-              validCategories.has(result.category) ? result.category : "other"
-            ) as CategoryId;
-            allScores.set(result.index, {
-              relevance: clamp(result.relevance),
-              quality: clamp(result.quality),
-              timeliness: clamp(result.timeliness),
-              category: cat,
-              keywords: Array.isArray(result.keywords)
-                ? result.keywords.slice(0, 4)
-                : [],
-            });
-          }
-        }
-      } catch (error) {
-        console.warn(
-          `[digest] Scoring batch failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        for (const item of batch) {
-          allScores.set(item.index, {
-            relevance: 5,
-            quality: 5,
-            timeliness: 5,
-            category: "other",
-            keywords: [],
-          });
-        }
-      }
-    });
-
-    await Promise.all(promises);
-    console.log(
-      `[digest] Scoring progress: ${Math.min(i + MAX_CONCURRENT_GEMINI, batches.length)}/${batches.length} batches`,
-    );
-  }
-
-  return allScores;
-}
-
-// ============================================================================
-// AI Summarization
-// ============================================================================
-
-function buildSummaryPrompt(
-  articles: Array<{
-    index: number;
-    title: string;
-    description: string;
-    sourceName: string;
-    link: string;
-  }>,
-  lang: "zh" | "en",
-): string {
-  const articlesList = articles
-    .map(
-      (a) =>
-        `Index ${a.index}: [${a.sourceName}] ${a.title}\nURL: ${a.link}\n${a.description.slice(0, 800)}`,
-    )
-    .join("\n\n---\n\n");
-
-  const langInstruction =
-    lang === "zh"
-      ? "请用中文撰写摘要和推荐理由。如果原文是英文，请翻译为中文。标题翻译也用中文。"
-      : "Write summaries, reasons, and title translations in English.";
-
-  return `你是一个技术内容摘要专家。请为以下文章完成三件事：
-
-1. **中文标题** (titleZh): 将英文标题翻译成自然的中文。如果原标题已经是中文则保持不变。
-2. **摘要** (summary): 4-6 句话的结构化摘要，让读者不点进原文也能了解核心内容。包含：
-   - 文章讨论的核心问题或主题（1 句）
-   - 关键论点、技术方案或发现（2-3 句）
-   - 结论或作者的核心观点（1 句）
-3. **推荐理由** (reason): 1 句话说明"为什么值得读"，区别于摘要（摘要说"是什么"，推荐理由说"为什么"）。
-
-${langInstruction}
-
-摘要要求：
-- 直接说重点，不要用"本文讨论了..."、"这篇文章介绍了..."这种开头
-- 包含具体的技术名词、数据、方案名称或观点
-- 保留关键数字和指标（如性能提升百分比、用户数、版本号等）
-- 如果文章涉及对比或选型，要点出比较对象和结论
-- 目标：读者花 30 秒读完摘要，就能决定是否值得花 10 分钟读原文
-
-## 待摘要文章
-
-${articlesList}
-
-请严格按 JSON 格式返回：
-{
-  "results": [
-    {
-      "index": 0,
-      "titleZh": "中文翻译的标题",
-      "summary": "摘要内容...",
-      "reason": "推荐理由..."
-    }
-  ]
-}`;
-}
-
-async function summarizeArticles(
-  articles: Array<Article & { index: number }>,
-  aiClient: AIClient,
-  lang: "zh" | "en",
-): Promise<Map<number, { titleZh: string; summary: string; reason: string }>> {
-  const summaries = new Map<
-    number,
-    { titleZh: string; summary: string; reason: string }
-  >();
-
-  const indexed = articles.map((a) => ({
-    index: a.index,
-    title: a.title,
-    description: a.description,
-    sourceName: a.sourceName,
-    link: a.link,
-  }));
-
-  const batches: (typeof indexed)[] = [];
-  for (let i = 0; i < indexed.length; i += GEMINI_BATCH_SIZE) {
-    batches.push(indexed.slice(i, i + GEMINI_BATCH_SIZE));
-  }
-
-  console.log(
-    `[digest] Generating summaries for ${articles.length} articles in ${batches.length} batches`,
-  );
-
-  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_GEMINI) {
-    const batchGroup = batches.slice(i, i + MAX_CONCURRENT_GEMINI);
-    const promises = batchGroup.map(async (batch) => {
-      try {
-        const prompt = buildSummaryPrompt(batch, lang);
-        const responseText = await aiClient.call(prompt);
-        const parsed = parseJsonResponse<GeminiSummaryResult>(responseText);
-
-        if (parsed.results && Array.isArray(parsed.results)) {
-          for (const result of parsed.results) {
-            summaries.set(result.index, {
-              titleZh: result.titleZh || "",
-              summary: result.summary || "",
-              reason: result.reason || "",
-            });
-          }
-        }
-      } catch (error) {
-        console.warn(
-          `[digest] Summary batch failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        for (const item of batch) {
-          summaries.set(item.index, {
-            titleZh: item.title,
-            summary: item.title,
-            reason: "",
-          });
-        }
-      }
-    });
-
-    await Promise.all(promises);
-    console.log(
-      `[digest] Summary progress: ${Math.min(i + MAX_CONCURRENT_GEMINI, batches.length)}/${batches.length} batches`,
-    );
-  }
-
-  return summaries;
-}
-
-// ============================================================================
-// AI Highlights (Today's Trends)
-// ============================================================================
-
-async function generateHighlights(
-  articles: ScoredArticle[],
-  aiClient: AIClient,
-  lang: "zh" | "en",
-): Promise<string> {
-  const articleList = articles
-    .slice(0, 10)
-    .map(
-      (a, i) =>
-        `${i + 1}. [${a.category}] ${a.titleZh || a.title} — ${a.summary.slice(0, 100)}`,
-    )
-    .join("\n");
-
-  const langNote = lang === "zh" ? "用中文回答。" : "Write in English.";
-
-  const prompt = `根据以下今日精选技术文章列表，写一段 3-5 句话的"今日看点"总结。
-要求：
-- 提炼出今天技术圈的 2-3 个主要趋势或话题
-- 不要逐篇列举，要做宏观归纳
-- 风格简洁有力，像新闻导语
-${langNote}
-
-文章列表：
-${articleList}
-
-直接返回纯文本总结，不要 JSON，不要 markdown 格式。`;
-
-  try {
-    const text = await aiClient.call(prompt);
-    return text.trim();
-  } catch (error) {
-    console.warn(
-      `[digest] Highlights generation failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return "";
-  }
 }
 
 // ============================================================================
@@ -1608,30 +1000,66 @@ Usage:
   bun scripts/digest.ts [options]
 
 Options:
-  --hours <n>     Time range in hours (default: 48)
-  --top-n <n>     Number of top articles to include (default: 15)
-  --lang <lang>   Summary language: zh or en (default: zh)
-  --output <path> Output file path (default: ./digest-YYYYMMDD.md)
-  --help          Show this help
+  --hours <n>      Time range in hours (default: 48)
+  --top-n <n>      Number of top articles to include (default: 15)
+  --lang <lang>    Summary language: zh or en (default: zh)
+  --output <path>  Output file path (default: ./digest-YYYYMMDD.md)
+  --format <fmt>   Output format: md or pdf (default: md)
+  --fetch-only     Fetch RSS and output raw articles as JSON (skill mode)
+  --from-json <f>  Read AI-processed data from JSON file, generate report
+  --help           Show this help
 
-Environment:
-  BAILIAN_API_KEY   Recommended. 阿里云百炼 API Key. Get one at https://bailian.console.aliyun.com/
-  DASHSCOPE_API_KEY Alias for BAILIAN_API_KEY
-  GEMINI_API_KEY    Optional. Gemini API Key. Get one at https://aistudio.google.com/apikey
-  OPENAI_API_KEY    Optional. OpenAI-compatible API Key for fallback
-  OPENAI_API_BASE   Optional. OpenAI-compatible base URL (default: https://api.openai.com/v1)
-  OPENAI_API_MODEL  Optional. OpenAI-compatible model (default: gpt-4o-mini)
-  OPENAI_MODEL      Alias for OPENAI_API_MODEL
-
-Priority: BAILIAN_API_KEY > GEMINI_API_KEY > OPENAI_API_KEY
+When running as an Agent Skill (Claude Code, OpenClaw, Hermes Agent, etc.),
+use --fetch-only to get raw articles, process them with the session model,
+then use --from-json to generate the report.
 
 Examples:
-  export BAILIAN_API_KEY=sk-xxx
-  bun scripts/digest.ts --hours 24 --top-n 10 --lang zh
-  
-  bun scripts/digest.ts --hours 72 --top-n 20 --lang en --output ./my-digest.md
+  # Skill mode: fetch articles for AI processing
+  bun scripts/digest.ts --hours 48 --fetch-only > articles.json
+
+  # Skill mode: generate report from AI-processed data
+  bun scripts/digest.ts --from-json processed.json --output ./digest.md
 `);
   process.exit(0);
+}
+
+interface FetchOnlyArticle {
+  title: string;
+  link: string;
+  pubDate: string;
+  description: string;
+  sourceName: string;
+  sourceUrl: string;
+}
+
+interface FetchOnlyStats {
+  totalFeeds: number;
+  successFeeds: number;
+  totalArticles: number;
+  filteredArticles: number;
+  hours: number;
+}
+
+interface FromJsonArticle {
+  title: string;
+  link: string;
+  pubDate: string;
+  description: string;
+  sourceName: string;
+  sourceUrl: string;
+  score: number;
+  scoreBreakdown: { relevance: number; quality: number; timeliness: number };
+  category: string;
+  keywords: string[];
+  titleZh: string;
+  summary: string;
+  reason: string;
+}
+
+interface FromJsonData {
+  articles: FromJsonArticle[];
+  highlights: string;
+  stats: FetchOnlyStats;
 }
 
 async function main(): Promise<void> {
@@ -1643,6 +1071,8 @@ async function main(): Promise<void> {
   let lang: "zh" | "en" = "zh";
   let outputPath = "";
   let format: "md" | "pdf" = "md";
+  let fetchOnly = false;
+  let fromJsonFile = "";
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -1659,61 +1089,77 @@ async function main(): Promise<void> {
       if (fmt === "pdf" || fmt === "md") {
         format = fmt;
       }
+    } else if (arg === "--fetch-only") {
+      fetchOnly = true;
+    } else if (arg === "--from-json" && args[i + 1]) {
+      fromJsonFile = args[++i]!;
     }
   }
 
-  const bailianApiKey =
-    process.env.BAILIAN_API_KEY || process.env.DASHSCOPE_API_KEY;
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-  const openaiApiBase = process.env.OPENAI_API_BASE;
-  const openaiModel = process.env.OPENAI_API_MODEL || process.env.OPENAI_MODEL;
+  // ── Mode: Generate report from AI-processed JSON ──
+  if (fromJsonFile) {
+    const raw = readFile(fromJsonFile, "utf-8") as Promise<string>;
+    const data: FromJsonData = JSON.parse(await raw);
 
-  if (!bailianApiKey && !geminiApiKey && !openaiApiKey) {
-    console.error(
-      "[digest] Error: Missing API key. Set BAILIAN_API_KEY (recommended), GEMINI_API_KEY, or OPENAI_API_KEY.",
-    );
-    console.error(
-      "[digest] Bailian (阿里云百炼): https://bailian.console.aliyun.com/",
-    );
-    console.error("[digest] Gemini: https://aistudio.google.com/apikey");
-    process.exit(1);
+    const validCategories = new Set<string>([
+      "ai-ml", "security", "engineering", "tools", "opinion", "other",
+    ]);
+
+    const finalArticles: ScoredArticle[] = data.articles.map((a) => ({
+      title: a.title,
+      link: a.link,
+      pubDate: new Date(a.pubDate),
+      description: a.description,
+      sourceName: a.sourceName,
+      sourceUrl: a.sourceUrl,
+      score: a.score,
+      scoreBreakdown: a.scoreBreakdown,
+      category: validCategories.has(a.category)
+        ? (a.category as CategoryId)
+        : ("other" as CategoryId),
+      keywords: a.keywords,
+      titleZh: a.titleZh,
+      summary: a.summary,
+      reason: a.reason,
+    }));
+
+    if (!outputPath) {
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      outputPath = `./digest-${dateStr}.md`;
+    }
+
+    console.error(`[digest] Generating report from ${finalArticles.length} processed articles...`);
+    const report = generateDigestReport(finalArticles, data.highlights, {
+      totalFeeds: data.stats.totalFeeds,
+      successFeeds: data.stats.successFeeds,
+      totalArticles: data.stats.totalArticles,
+      filteredArticles: data.stats.filteredArticles,
+      hours: data.stats.hours,
+      lang,
+    });
+
+    await mkdir(dirname(outputPath), { recursive: true });
+
+    if (format === "pdf") {
+      console.error(`[digest] 🔄 Converting to PDF...`);
+      await convertMarkdownToPDF(report, outputPath);
+    } else {
+      await writeFile(outputPath, report);
+    }
+
+    console.error(`[digest] ✅ Done! 📁 ${outputPath}`);
+    return;
   }
 
-  const aiClient = createAIClient({
-    bailianApiKey,
-    geminiApiKey,
-    openaiApiKey,
-    openaiApiBase,
-    openaiModel,
-  });
+  // ── Mode: Fetch RSS feeds (default and --fetch-only) ──
+  console.error(`[digest] === AI Daily Digest ===`);
+  console.error(`[digest] Time range: ${hours} hours`);
+  console.error(`[digest] Top N: ${topN}`);
+  console.error(`[digest] Language: ${lang}`);
+  console.error(`[digest] Mode: ${fetchOnly ? "fetch-only (JSON output)" : "full pipeline"}`);
+  console.error("");
 
-  if (!outputPath) {
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    outputPath = `./digest-${dateStr}.md`;
-  }
-
-  console.log(`[digest] === AI Daily Digest ===`);
-  console.log(`[digest] Time range: ${hours} hours`);
-  console.log(`[digest] Top N: ${topN}`);
-  console.log(`[digest] Language: ${lang}`);
-  console.log(`[digest] Output: ${outputPath}`);
-  const primaryProvider = bailianApiKey
-    ? "Bailian (阿里云百炼)"
-    : geminiApiKey
-      ? "Gemini"
-      : "OpenAI-compatible";
-  console.log(`[digest] AI provider: ${primaryProvider} (primary)`);
-  if (openaiApiKey) {
-    const resolvedBase = (
-      openaiApiBase?.trim() || OPENAI_DEFAULT_API_BASE
-    ).replace(/\/+$/, "");
-    const resolvedModel = openaiModel?.trim() || inferOpenAIModel(resolvedBase);
-    console.log(`[digest] Fallback: ${resolvedBase} (model=${resolvedModel})`);
-  }
-  console.log("");
-
-  console.log(`[digest] Step 1/5: Fetching ${RSS_FEEDS.length} RSS feeds...`);
+  console.error(`[digest] Step 1/2: Fetching ${RSS_FEEDS.length} RSS feeds...`);
   const allArticles = await fetchAllFeeds(RSS_FEEDS);
 
   if (allArticles.length === 0) {
@@ -1723,13 +1169,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`[digest] Step 2/5: Filtering by time range (${hours} hours)...`);
+  console.error(`[digest] Step 2/2: Filtering by time range (${hours} hours)...`);
   const cutoffTime = new Date(Date.now() - hours * 60 * 60 * 1000);
   const recentArticles = allArticles.filter(
     (a) => a.pubDate.getTime() > cutoffTime.getTime(),
   );
 
-  console.log(
+  console.error(
     `[digest] Found ${recentArticles.length} articles within last ${hours} hours`,
   );
 
@@ -1743,103 +1189,44 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(
-    `[digest] Step 3/5: AI scoring ${recentArticles.length} articles...`,
-  );
-  const scores = await scoreArticlesWithAI(recentArticles, aiClient);
-
-  const scoredArticles = recentArticles.map((article, index) => {
-    const score = scores.get(index) || {
-      relevance: 5,
-      quality: 5,
-      timeliness: 5,
-      category: "other" as CategoryId,
-      keywords: [],
-    };
-    return {
-      ...article,
-      totalScore: score.relevance + score.quality + score.timeliness,
-      breakdown: score,
-    };
-  });
-
-  scoredArticles.sort((a, b) => b.totalScore - a.totalScore);
-  const topArticles = scoredArticles.slice(0, topN);
-
-  console.log(
-    `[digest] Top ${topN} articles selected (score range: ${topArticles[topArticles.length - 1]?.totalScore || 0} - ${topArticles[0]?.totalScore || 0})`,
-  );
-
-  console.log(`[digest] Step 4/5: Generating AI summaries...`);
-  const indexedTopArticles = topArticles.map((a, i) => ({ ...a, index: i }));
-  const summaries = await summarizeArticles(indexedTopArticles, aiClient, lang);
-
-  const finalArticles: ScoredArticle[] = topArticles.map((a, i) => {
-    const sm = summaries.get(i) || {
-      titleZh: a.title,
-      summary: a.description.slice(0, 200),
-      reason: "",
-    };
-    return {
-      title: a.title,
-      link: a.link,
-      pubDate: a.pubDate,
-      description: a.description,
-      sourceName: a.sourceName,
-      sourceUrl: a.sourceUrl,
-      score: a.totalScore,
-      scoreBreakdown: {
-        relevance: a.breakdown.relevance,
-        quality: a.breakdown.quality,
-        timeliness: a.breakdown.timeliness,
-      },
-      category: a.breakdown.category,
-      keywords: a.breakdown.keywords,
-      titleZh: sm.titleZh,
-      summary: sm.summary,
-      reason: sm.reason,
-    };
-  });
-
-  console.log(`[digest] Step 5/5: Generating today's highlights...`);
-  const highlights = await generateHighlights(finalArticles, aiClient, lang);
-
   const successfulSources = new Set(allArticles.map((a) => a.sourceName));
-
-  const report = generateDigestReport(finalArticles, highlights, {
+  const stats: FetchOnlyStats = {
     totalFeeds: RSS_FEEDS.length,
     successFeeds: successfulSources.size,
     totalArticles: allArticles.length,
     filteredArticles: recentArticles.length,
     hours,
-    lang,
-  });
+  };
 
-  await mkdir(dirname(outputPath), { recursive: true });
+  // ── Output JSON for skill mode ──
+  if (fetchOnly) {
+    const output: FetchOnlyArticle[] = recentArticles.map((a) => ({
+      title: a.title,
+      link: a.link,
+      pubDate: a.pubDate.toISOString(),
+      description: a.description,
+      sourceName: a.sourceName,
+      sourceUrl: a.sourceUrl,
+    }));
 
-  if (format === "pdf") {
-    console.log(`[digest] 🔄 Converting to PDF...`);
-    await convertMarkdownToPDF(report, outputPath);
-  } else {
-    await writeFile(outputPath, report);
+    console.log(JSON.stringify({ articles: output, stats }));
+    return;
   }
 
-  console.log("");
-  console.log(`[digest] ✅ Done!`);
-  console.log(`[digest] 📁 Report: ${outputPath}`);
-  console.log(
-    `[digest] 📊 Stats: ${successfulSources.size} sources → ${allArticles.length} articles → ${recentArticles.length} recent → ${finalArticles.length} selected`,
+  // ── Default mode: no AI provider configured ──
+  console.error(
+    "[digest] Error: No AI provider configured.",
   );
-
-  if (finalArticles.length > 0) {
-    console.log("");
-    console.log(`[digest] 🏆 Top 3 Preview:`);
-    for (let i = 0; i < Math.min(3, finalArticles.length); i++) {
-      const a = finalArticles[i];
-      console.log(`  ${i + 1}. ${a.titleZh || a.title}`);
-      console.log(`     ${a.summary.slice(0, 80)}...`);
-    }
-  }
+  console.error(
+    "[digest] Running as an Agent Skill? Use --fetch-only to get raw articles,",
+  );
+  console.error(
+    "[digest] then use --from-json to generate the report after AI processing.",
+  );
+  console.error(
+    "[digest] See SKILL.md for the complete workflow.",
+  );
+  process.exit(1);
 }
 
 await main().catch((err) => {
